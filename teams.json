@@ -1,0 +1,32 @@
+{
+  "TeamA": [
+    {
+      "email": "jjc@acme.com",
+      "name": "Jim Croche"
+    },
+    {
+      "email": "bhf@acme.com",
+      "name": "Bill Fettman"
+    }
+  ],
+  "TeamB": [
+    {
+      "email": "abc@acme.com",
+      "name": "Allen Crab"
+    },
+    {
+      "email": "mrb@acme.com",
+      "name": "Mike Brown"
+    }
+  ],
+  "TeamC": [
+    {
+      "email": "xxx@acme.com",
+      "name": "XXX"
+    },
+    {
+      "email": "jdoe@acme.com",
+      "name": "John Doe"
+    }
+  ]
+}
