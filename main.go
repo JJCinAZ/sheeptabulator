@@ -28,9 +28,14 @@ type Member struct {
 	Team  string `json:"-"`
 }
 
+type PopulationCount struct {
+	Freq           int
+	OriginalAnswer string
+}
+
 type Question struct {
 	Text             string
-	PopulationCounts map[string]int
+	PopulationCounts map[string]*PopulationCount
 }
 
 var (
@@ -82,6 +87,8 @@ func main() {
 	printScores(*individual, *missingMemberMode)
 }
 
+// Read responses from XLSX file exported from Microsoft Forms.
+// Expect row 1 to have column titles in it with rows 2+ having the data (excel table format)
 func readResponses(filename string) error {
 	var (
 		startcol, colincrement int
@@ -98,6 +105,7 @@ func readResponses(filename string) error {
 	for rownum, row := range rows {
 		var a Response
 		if rownum == 0 {
+			// First row (row #1), so check titles to see if this spreadsheet is of the expected format
 			if Questions, startcol, colincrement, err = checkTitles(row); err != nil {
 				return err
 			}
@@ -159,8 +167,8 @@ func printScores(individual bool, missingMemberMode string) {
 			PopCount int
 		}
 		a := make([]x, 0, len(q.PopulationCounts))
-		for answer, count := range q.PopulationCounts {
-			a = append(a, x{Answer: answer, PopCount: count})
+		for _, p := range q.PopulationCounts {
+			a = append(a, x{Answer: p.OriginalAnswer, PopCount: p.Freq})
 		}
 		sort.Slice(a, func(i, j int) bool {
 			return a[i].PopCount > a[j].PopCount
@@ -266,10 +274,14 @@ func printScores(individual bool, missingMemberMode string) {
 func calcScores() {
 	// First create a map for each question with the frequency of each answer
 	for _, r := range Responses {
-		for i, a := range r.Answers {
-			if len(a) > 0 {
-				a = strings.ToLower(a)
-				Questions[i].PopulationCounts[a] = Questions[i].PopulationCounts[a] + 1
+		for i, answerText := range r.Answers {
+			if len(answerText) > 0 {
+				a := strings.ToLower(answerText)
+				if pc, exists := Questions[i].PopulationCounts[a]; exists {
+					pc.Freq++
+				} else {
+					Questions[i].PopulationCounts[a] = &PopulationCount{Freq: 1, OriginalAnswer: answerText}
+				}
 			}
 		}
 	}
@@ -279,8 +291,8 @@ func calcScores() {
 		for i, a := range Responses[idxR].Answers {
 			if len(a) > 0 {
 				a = strings.ToLower(a)
-				Responses[idxR].AnswerScore[i] = Questions[i].PopulationCounts[a]
-				score += Questions[i].PopulationCounts[a]
+				Responses[idxR].AnswerScore[i] = Questions[i].PopulationCounts[a].Freq
+				score += Questions[i].PopulationCounts[a].Freq
 			}
 		}
 		Responses[idxR].TotalScore = score
@@ -360,7 +372,7 @@ func checkTitles(row []string) ([]Question, int, int, error) {
 				return nil, 0, 0, fmt.Errorf("column #%d was supposed to be '%s' but is '%s'", i+2+1, x, row[i+2])
 			}
 		}
-		questions = append(questions, Question{Text: q, PopulationCounts: make(map[string]int)})
+		questions = append(questions, Question{Text: q, PopulationCounts: make(map[string]*PopulationCount)})
 	}
 	return questions, startcol, colincrement, nil
 }
