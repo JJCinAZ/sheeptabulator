@@ -7,6 +7,7 @@ import (
 	"github.com/360EntSecGroup-Skylar/excelize"
 	"io/ioutil"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,36 +22,56 @@ type Response struct {
 	Answers     []string
 	AnswerScore []int
 	TotalScore  int
+	TotalBonus  int
 }
 
 type Member struct {
 	Email string `json:"email"`
+	Name  string `json:"name"`
 	Team  string `json:"-"`
 }
 
 type PopulationCount struct {
 	Freq           int
 	OriginalAnswer string
+	Bonus          int // If this was a bonus answer, what's the bonus value
 }
 
 type Question struct {
 	Text             string
+	BonusQuestion    bool
+	BonusAnswer      string
+	BonusValue       int
 	PopulationCounts map[string]*PopulationCount
 }
 
 var (
 	Teams     map[string][]Member // map[team name][]Member
-	Responses []Response
 	Questions []Question
 	TeamMode  bool
 )
 
 func main() {
+	var (
+		Responses []Response
+	)
 	individual := flag.Bool("i", false, "Show individual question/answer scores")
 	filename := flag.String("f", "", "Spreadsheet with responses to read")
 	teamfile := flag.String("teamfile", "", "File name of JSON file with team information (leave off if not using teams)")
 	missingMemberMode := flag.String("missing", "avg", "Mode for handling missing members: avg, least, middle")
+	printteams := flag.Bool("print", false, "Print Teams")
 	flag.Parse()
+	if *printteams {
+		if err := getTeams(*teamfile); err != nil {
+			fmt.Println(err)
+			os.Exit(2)
+		}
+		fmt.Printf("Read %d Teams and %d members from %s\n", len(Teams), totalMembers(), *teamfile)
+		if *printteams {
+			printTeams()
+			os.Exit(0)
+		}
+	}
 	if len(*filename) == 0 {
 		flag.PrintDefaults()
 		os.Exit(1)
@@ -73,53 +94,53 @@ func main() {
 	} else {
 		fmt.Printf("Teams mode is disabled\n")
 	}
-	err := readResponses(*filename)
+	Responses, err := readResponses(*filename)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(2)
 	}
 	fmt.Printf("Read %d responses\n", len(Responses))
-	eliminateDups()
-	calcScores()
+	Responses = eliminateDups(Responses)
+	calcScores(Responses)
 	if TeamMode {
-		printMissingMembers()
+		printMissingMembers(Responses)
 	}
-	printScores(*individual, *missingMemberMode)
+	printScores(Responses, *individual, *missingMemberMode)
 }
 
 // Read responses from XLSX file exported from Microsoft Forms.
 // Expect row 1 to have column titles in it with rows 2+ having the data (excel table format)
-func readResponses(filename string) error {
+func readResponses(filename string) ([]Response, error) {
 	var (
 		startcol, colincrement int
 	)
 	f, err := excelize.OpenFile(filename)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	Responses = make([]Response, 0)
 	rows, err := f.GetRows("Sheet1")
 	if err != nil {
-		return err
+		return nil, err
 	}
+	list := make([]Response, 0)
 	for rownum, row := range rows {
 		var a Response
 		if rownum == 0 {
 			// First row (row #1), so check titles to see if this spreadsheet is of the expected format
 			if Questions, startcol, colincrement, err = checkTitles(row); err != nil {
-				return err
+				return nil, err
 			}
 		} else {
 			a.Email = strings.ToLower(row[3])
 			a.Name = row[4]
 			if TeamMode {
 				if a.Team, err = findTeam(a.Email); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			f, err := strconv.ParseFloat(row[2], 64)
 			if err != nil {
-				return fmt.Errorf("invalid Completed time (%s) on row:\n%+v\n", err, row)
+				return nil, fmt.Errorf("invalid Completed time (%s) on row:\n%+v\n", err, row)
 			}
 			a.Completed = TimeFromExcelTime(f, false)
 			for i := 0; i < len(Questions); i++ {
@@ -129,17 +150,17 @@ func readResponses(filename string) error {
 				}
 			}
 			a.AnswerScore = make([]int, len(Questions))
-			Responses = append(Responses, a)
+			list = append(list, a)
 		}
 	}
-	return nil
+	return list, nil
 }
 
-func printMissingMembers() {
+func printMissingMembers(responses []Response) {
 	for name, members := range Teams {
 		for _, member := range members {
 			found := false
-			for _, r := range Responses {
+			for _, r := range responses {
 				if strings.EqualFold(r.Email, member.Email) {
 					found = true
 					break
@@ -152,7 +173,7 @@ func printMissingMembers() {
 	}
 }
 
-func printScores(individual bool, missingMemberMode string) {
+func printScores(responses []Response, individual bool, missingMemberMode string) {
 	type memberscore struct {
 		name, email string
 		score       int
@@ -174,22 +195,26 @@ func printScores(individual bool, missingMemberMode string) {
 			return a[i].PopCount > a[j].PopCount
 		})
 		for i := range a {
-			fmt.Printf("\t%3d\t%s\n", a[i].PopCount, a[i].Answer)
+			if q.BonusQuestion && strings.EqualFold(q.BonusAnswer, a[i].Answer) {
+				fmt.Printf("\t%3d 🎯\t%s\n", q.BonusValue, a[i].Answer)
+			} else {
+				fmt.Printf("\t%3d\t%s\n", a[i].PopCount, a[i].Answer)
+			}
 		}
 	}
 	if individual {
 		// Print Individual Scores
-		for idxR := range Responses {
-			fmt.Println(Responses[idxR].Name)
-			for i, a := range Responses[idxR].Answers {
-				fmt.Printf("\t%2d: %3d\t%s\n", i, Responses[idxR].AnswerScore[i], a)
+		for idxR := range responses {
+			fmt.Println(responses[idxR].Name)
+			for i, a := range responses[idxR].Answers {
+				fmt.Printf("\t%2d: %3d\t%s\n", i, responses[idxR].AnswerScore[i], a)
 			}
-			fmt.Printf("\t-----------------------\n\t total %d\n", Responses[idxR].TotalScore)
+			fmt.Printf("\t-----------------------\n\t total %d\n", responses[idxR].TotalScore)
 		}
 		fmt.Println("")
 	}
 	sortedScores := make([]memberscore, 0)
-	for _, r := range Responses {
+	for _, r := range responses {
 		sortedScores = append(sortedScores, memberscore{name: r.Name, email: r.Email, score: r.TotalScore})
 	}
 	sort.Slice(sortedScores, func(i, j int) bool {
@@ -213,7 +238,7 @@ func printScores(individual bool, missingMemberMode string) {
 	for n := range Teams {
 		var ts teamscore
 		membercount := 0
-		for _, r := range Responses {
+		for _, r := range responses {
 			if r.Team == n {
 				ts.score += r.TotalScore
 				membercount++
@@ -221,7 +246,7 @@ func printScores(individual bool, missingMemberMode string) {
 		}
 		ts.name = n
 		ts.members = make([]memberscore, 0, 4)
-		for _, r := range Responses {
+		for _, r := range responses {
 			if r.Team == n {
 				ts.members = append(ts.members, memberscore{
 					name:  r.Name,
@@ -271,9 +296,19 @@ func printScores(individual bool, missingMemberMode string) {
 	}
 }
 
-func calcScores() {
+func (q *Question) mostFreqAnswer() int {
+	max := 0
+	for _, v := range q.PopulationCounts {
+		if v.Freq > max {
+			max = v.Freq
+		}
+	}
+	return max
+}
+
+func calcScores(responses []Response) {
 	// First create a map for each question with the frequency of each answer
-	for _, r := range Responses {
+	for _, r := range responses {
 		for i, answerText := range r.Answers {
 			if len(answerText) > 0 {
 				a := strings.ToLower(answerText)
@@ -285,42 +320,54 @@ func calcScores() {
 			}
 		}
 	}
+
+	// Calculate value of bonus answers
+	for idxQ := range Questions {
+		if Questions[idxQ].BonusQuestion {
+			i := Questions[idxQ].mostFreqAnswer()
+			Questions[idxQ].BonusValue = i + (i >> 1)
+		}
+	}
+
 	// Now go through the answers in each response and assign the score to each based on the frequency map
-	for idxR := range Responses {
-		score := 0
-		for i, a := range Responses[idxR].Answers {
+	for idxR := range responses {
+		responses[idxR].TotalScore = 0
+		for i, a := range responses[idxR].Answers {
 			if len(a) > 0 {
 				a = strings.ToLower(a)
-				Responses[idxR].AnswerScore[i] = Questions[i].PopulationCounts[a].Freq
-				score += Questions[i].PopulationCounts[a].Freq
+				score := Questions[i].PopulationCounts[a].Freq
+				if Questions[i].BonusQuestion && strings.EqualFold(Questions[i].BonusAnswer, a) {
+					score = Questions[i].BonusValue
+				}
+				responses[idxR].AnswerScore[i] = score
+				responses[idxR].TotalScore += score
 			}
 		}
-		Responses[idxR].TotalScore = score
 	}
 }
 
-func eliminateDups() {
+func eliminateDups(responses []Response) []Response {
 	// Eliminate duplicate responses by a member, taking the last completed one only
-	sort.Slice(Responses, func(i, j int) bool {
-		if Responses[i].Email == Responses[j].Email {
-			return Responses[i].Completed.Before(Responses[j].Completed)
+	sort.Slice(responses, func(i, j int) bool {
+		if responses[i].Email == responses[j].Email {
+			return responses[i].Completed.Before(responses[j].Completed)
 		}
-		return Responses[i].Email < Responses[j].Email
+		return responses[i].Email < responses[j].Email
 	})
 	var last Response
-	a2 := make([]Response, 0, len(Responses))
-	for i, a := range Responses {
+	newlist := make([]Response, 0, len(responses))
+	for i, a := range responses {
 		if i > 0 {
 			if a.Email != last.Email {
-				a2 = append(a2, last)
+				newlist = append(newlist, last)
 			}
 		}
 		last = a
 	}
 	if len(last.Email) > 0 {
-		a2 = append(a2, last)
+		newlist = append(newlist, last)
 	}
-	Responses = a2
+	return newlist
 }
 
 func totalMembers() int {
@@ -342,6 +389,15 @@ func findTeam(email string) (string, error) {
 	return "", fmt.Errorf("cannot find '%s' on any team", email)
 }
 
+func firstRune(s string) rune {
+	var first rune
+	for _, r := range s {
+		first = r
+		break
+	}
+	return first
+}
+
 func checkTitles(row []string) ([]Question, int, int, error) {
 	var cols = []string{"ID", "Start time", "Completion time", "Email", "Name"}
 	if len(row) < 7 {
@@ -359,6 +415,9 @@ func checkTitles(row []string) ([]Question, int, int, error) {
 	}
 	for i := startcol; i < len(row); i += colincrement {
 		q := row[i]
+		if len(q) == 0 {
+			return nil, 0, 0, fmt.Errorf("column #%d has no title", i)
+		}
 		if colincrement > 1 {
 			if i+2 >= len(row) {
 				return nil, 0, 0, fmt.Errorf("too few columns, expect: answer, points, feedback tuples")
@@ -372,7 +431,22 @@ func checkTitles(row []string) ([]Question, int, int, error) {
 				return nil, 0, 0, fmt.Errorf("column #%d was supposed to be '%s' but is '%s'", i+2+1, x, row[i+2])
 			}
 		}
-		questions = append(questions, Question{Text: q, PopulationCounts: make(map[string]*PopulationCount)})
+		if firstRune(q) == '🎯' {
+			// Bonus question.  Expect bonus answer to be on the end of the title: "Question [bonus answer]"
+			regx := regexp.MustCompile(`(?U)(^.+)\s*\[(.*)\]\s*$`)
+			if matches := regx.FindStringSubmatch(q); matches == nil {
+				return nil, 0, 0, fmt.Errorf("column #%d is a bonus question but is missing ending answer <%s [answer]>", i, q)
+			} else {
+				questions = append(questions, Question{
+					Text:             matches[1],
+					BonusAnswer:      matches[2],
+					BonusQuestion:    true,
+					PopulationCounts: make(map[string]*PopulationCount),
+				})
+			}
+		} else {
+			questions = append(questions, Question{Text: q, PopulationCounts: make(map[string]*PopulationCount)})
+		}
 	}
 	return questions, startcol, colincrement, nil
 }
@@ -391,4 +465,20 @@ func getTeams(filename string) error {
 		}
 	}
 	return err
+}
+
+func printTeams() {
+	for name, members := range Teams {
+		fmt.Printf("Team Name: %s\n", name)
+		for _, member := range members {
+			fmt.Printf("\t%s\n", member.Name)
+		}
+	}
+
+	for _, members := range Teams {
+		for _, member := range members {
+			fmt.Printf("%s,", member.Email)
+		}
+	}
+	fmt.Println("")
 }
