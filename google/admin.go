@@ -85,7 +85,7 @@ func GetName(email string) (string, error) {
 		if b, err = ioutil.ReadFile("credentials.json"); err != nil {
 			log.Fatalf("unable to read credentials.json: %s", err.Error())
 		}
-		config, err = google.ConfigFromJSON(b, people.ContactsReadonlyScope)
+		config, err = google.ConfigFromJSON(b, people.DirectoryReadonlyScope)
 		if err != nil {
 			log.Fatalf("unable to People client: %s", err.Error())
 		}
@@ -95,17 +95,30 @@ func GetName(email string) (string, error) {
 			log.Fatalf("unable to create GAPI service: %s", err.Error())
 		}
 	})
-	r, err := gapiSvc.People.Connections.List("people/me").
-		PersonFields("names,emailAddresses").Do()
-	if err != nil {
-		log.Fatalf("Unable to retrieve people. %v", err)
-	}
-	for _, c := range r.Connections {
-		var name string
-		if len(c.Names) > 0 {
-			name = c.Names[0].DisplayName
+	var r *people.ListDirectoryPeopleResponse
+	for {
+		pagetoken := ""
+		if r != nil {
+			pagetoken = r.NextPageToken
 		}
-		fmt.Printf("%s\t%s\n", c.EmailAddresses[0].Value, name)
+		r, err = gapiSvc.People.ListDirectoryPeople().
+			Sources("DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE").
+			ReadMask("names,emailAddresses").
+			PageToken(pagetoken).
+			Do()
+		if err != nil {
+			log.Fatalf("Unable to retrieve people. %v", err)
+		}
+		for _, c := range r.People {
+			var name string
+			if len(c.Names) > 0 {
+				name = c.Names[0].DisplayName
+			}
+			fmt.Printf("%s\t%s\n", c.EmailAddresses[0].Value, name)
+		}
+		if len(r.NextPageToken) == 0 {
+			break
+		}
 	}
 	return "me", nil
 }

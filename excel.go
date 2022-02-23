@@ -18,7 +18,7 @@ func readXLSX(filename string) ([]Response, error) {
 		return nil, err
 	}
 	defer f.Close()
-	rows, err := f.GetRows("Sheet1")
+	rows, err := f.GetRows("Sheet1", excelize.Options{RawCellValue: true})
 	if err != nil {
 		return nil, err
 	}
