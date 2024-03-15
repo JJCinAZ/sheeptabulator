@@ -56,6 +56,7 @@ func main() {
 		err       error
 	)
 	individual := flag.Bool("i", false, "Show individual question/answer scores")
+	sortByResponse := flag.Bool("r", false, "Sort by response text instead of response frequency")
 	filename := flag.String("f", "", "Spreadsheet with responses to read")
 	teamfile := flag.String("teamfile", "", "File name of JSON file with team information (leave off if not using teams)")
 	missingMemberMode := flag.String("missing", "avg", "Mode for handling missing members: avg, least, middle")
@@ -105,7 +106,7 @@ func main() {
 	if TeamMode {
 		printMissingMembers(Responses)
 	}
-	printScores(Responses, *individual, *missingMemberMode)
+	printScores(Responses, *individual, *missingMemberMode, *sortByResponse)
 }
 
 // Read responses from input file
@@ -136,7 +137,7 @@ func printMissingMembers(responses []Response) {
 	}
 }
 
-func printScores(responses []Response, individual bool, missingMemberMode string) {
+func printScores(responses []Response, individual bool, missingMemberMode string, sortByResponse bool) {
 	type memberscore struct {
 		name, email string
 		score       int
@@ -154,9 +155,15 @@ func printScores(responses []Response, individual bool, missingMemberMode string
 		for _, p := range q.PopulationCounts {
 			a = append(a, x{Answer: p.OriginalAnswer, PopCount: p.Freq})
 		}
-		sort.Slice(a, func(i, j int) bool {
-			return a[i].PopCount > a[j].PopCount
-		})
+		if sortByResponse {
+			sort.Slice(a, func(i, j int) bool {
+				return a[i].Answer < a[j].Answer
+			})
+		} else {
+			sort.Slice(a, func(i, j int) bool {
+				return a[i].PopCount > a[j].PopCount
+			})
+		}
 		for i := range a {
 			if q.BonusQuestion && strings.EqualFold(q.BonusAnswer, a[i].Answer) {
 				fmt.Printf("\t%3d 🎯\t%s\n", q.BonusValue, a[i].Answer)

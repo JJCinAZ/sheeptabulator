@@ -1,4 +1,5 @@
-/sheeptabulator
-/token.json
-/credentials.json
-/sheeptabulator.exe
+sheeptabulator
+sheeptabulator.exe
+token.json
+credentials.json
+/.idea/

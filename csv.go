@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -61,27 +62,35 @@ func readCSV(filename string) ([]Response, error) {
 
 func checkCSVTitles(row []string) ([]Question, int, int, int, error) {
 	var (
-		cols    = []string{"Timestamp", "Email Address"}
-		namecol = -1
+		requiredColumns = []string{"Timestamp", "Email Address"}
+		namecol         = -1
 	)
 	if len(row) < 3 {
 		return nil, 0, 0, 0, fmt.Errorf("CSV cannot be correct -- has less than 3 columns")
 	}
 	questions := make([]Question, 0)
-	for i, c := range cols {
+	// Trim spaces from column titles
+	for i := range row {
+		row[i] = strings.TrimSpace(row[i])
+	}
+	// Check for required columns
+	for i, c := range requiredColumns {
 		if row[i] != c {
 			return nil, 0, 0, 0, fmt.Errorf("column #%d is not %s", i+1, c)
 		}
 	}
+	// Check to see if the first column is "Your Name..."
 	startcol, colincrement := 2, 1
-	if strings.TrimSpace(row[startcol]) == "Your Name (First & Last)" {
+	if strings.HasPrefix(row[startcol], "Your Name") {
 		startcol++
 		namecol = 2
 	}
+	// Gather questions
 	for i := startcol; i < len(row); i += colincrement {
 		if len(row[i]) == 0 {
 			return nil, 0, 0, 0, fmt.Errorf("column #%d has no title", i)
 		}
+		row[i] = trimNumberPrefix(row[i])
 		if q, err := buildQuestion(row[i]); err != nil {
 			return nil, 0, 0, 0, err
 		} else {
@@ -89,4 +98,14 @@ func checkCSVTitles(row []string) ([]Question, int, int, int, error) {
 		}
 	}
 	return questions, startcol, colincrement, namecol, nil
+}
+
+// trimNumberPrefix removes a number prefix from a string
+// This function does not work with unicode space characters
+func trimNumberPrefix(s string) string {
+	var regex = regexp.MustCompile(`^\s*\d+\.\s*`)
+	if loc := regex.FindStringIndex(s); loc != nil {
+		return s[loc[1]:]
+	}
+	return s
 }
