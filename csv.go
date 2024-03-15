@@ -12,10 +12,10 @@ import (
 // Expect row 1 to have column titles in it with rows 2+ having the data
 func readCSV(filename string) ([]Response, error) {
 	var (
-		startcol, colincrement int
-		f                      *os.File
-		err                    error
-		rows                   [][]string
+		startcol, colincrement, namecol int
+		f                               *os.File
+		err                             error
+		rows                            [][]string
 	)
 	if f, err = os.Open(filename); err != nil {
 		return nil, err
@@ -30,13 +30,16 @@ func readCSV(filename string) ([]Response, error) {
 		var a Response
 		if rownum == 0 {
 			// First row (row #1), so check titles to see if this spreadsheet is of the expected format
-			if Questions, startcol, colincrement, err = checkCSVTitles(row); err != nil {
+			if Questions, startcol, colincrement, namecol, err = checkCSVTitles(row); err != nil {
 				return nil, err
 			}
 		} else {
 			a.Completed, _ = time.Parse("01/02/2006 14:04:05", row[0])
 			a.Email = strings.ToLower(row[1])
 			a.Name = a.Email
+			if namecol > 0 {
+				a.Name = row[namecol]
+			}
 			//a.Name, _ = getGoogleName(a.Email)
 			if TeamMode {
 				if a.Team, err = findTeam(a.Email); err != nil {
@@ -56,27 +59,34 @@ func readCSV(filename string) ([]Response, error) {
 	return list, nil
 }
 
-func checkCSVTitles(row []string) ([]Question, int, int, error) {
-	var cols = []string{"Timestamp", "Email Address"}
+func checkCSVTitles(row []string) ([]Question, int, int, int, error) {
+	var (
+		cols    = []string{"Timestamp", "Email Address"}
+		namecol = -1
+	)
 	if len(row) < 3 {
-		return nil, 0, 0, fmt.Errorf("CSV cannot be correct -- has less than 3 columns")
+		return nil, 0, 0, 0, fmt.Errorf("CSV cannot be correct -- has less than 3 columns")
 	}
 	questions := make([]Question, 0)
 	for i, c := range cols {
 		if row[i] != c {
-			return nil, 0, 0, fmt.Errorf("column #%d is not %s", i+1, c)
+			return nil, 0, 0, 0, fmt.Errorf("column #%d is not %s", i+1, c)
 		}
 	}
 	startcol, colincrement := 2, 1
+	if strings.TrimSpace(row[startcol]) == "Your Name (First & Last)" {
+		startcol++
+		namecol = 2
+	}
 	for i := startcol; i < len(row); i += colincrement {
 		if len(row[i]) == 0 {
-			return nil, 0, 0, fmt.Errorf("column #%d has no title", i)
+			return nil, 0, 0, 0, fmt.Errorf("column #%d has no title", i)
 		}
 		if q, err := buildQuestion(row[i]); err != nil {
-			return nil, 0, 0, err
+			return nil, 0, 0, 0, err
 		} else {
 			questions = append(questions, q)
 		}
 	}
-	return questions, startcol, colincrement, nil
+	return questions, startcol, colincrement, namecol, nil
 }
